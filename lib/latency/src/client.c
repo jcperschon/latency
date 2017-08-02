@@ -12,7 +12,7 @@
 #include "latency/scheduler.h"
 #include "common.h"
 
-int create_clients(const char *ip, const int port, const int count,
+static int create_clients(const char *ip, const int port, const int count,
     ssize_t size, int eserver, struct rte_ring *cds, struct rte_ring *worker) {
   struct sockaddr_in address;
   memset(&address, 0, sizeof(address));
@@ -52,8 +52,13 @@ int create_clients(const char *ip, const int port, const int count,
 
 static int benchmark(const char *ip, const int port, const int count,
     int samples, ssize_t size, int wcpu) {
-  printf("Running client\n");
-  int collected = -count;
+  unsigned cpu, node;
+  if (getcpu(&cpu, &node) < 0) {
+    perror("Unable to determine cpu/node");
+    return -1;
+  }
+  printf("Running client reader on cpu %u node %u \n", cpu, node);
+  int collected = 0;
   int eserver = epoll_create1(0);
   if (eserver < 0) {
     perror("Unable to create epoll file descriptor");
@@ -75,7 +80,7 @@ static int benchmark(const char *ip, const int port, const int count,
   if (create_clients(ip, port, count, size, eserver, ring, param.ring) < 0) {
     return -1;
   }
-  uint64_t *results = malloc(sizeof(uint64_t) * samples);
+  uint64_t *results = malloc(sizeof(uint64_t) * samples * 4);
   if (results == NULL) {
     perror("Unable to buffer results");
     return -1;
@@ -94,8 +99,9 @@ static int benchmark(const char *ip, const int port, const int count,
   struct epoll_event *events = malloc(sizeof(struct epoll_event) *
       LATENCY_MAX_EVENTS);
   do {
+    struct timespec now;
     int n, i, ret;
-    n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, 0);
+    n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, -1);
     if (n < 0) {
       perror("Epoll wait error");
       return -1;
@@ -117,25 +123,30 @@ static int benchmark(const char *ip, const int port, const int count,
         free(cd);
         continue;
       }
+      if (cd->valid && cd->remaining == size) {
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now);
+        results[collected * 4 + 0] = ns_diff(cd->timers[0], cd->timers[1]);
+        results[collected * 4 + 1] = ns_diff(cd->timers[1], cd->timers[2]);
+        results[collected * 4 + 2] = ns_diff(cd->timers[2], cd->timers[3]);
+        results[collected * 4 + 3] = ns_diff(cd->timers[3], now);
+      }
       ret = receive_data(cd, size);
       if (ret < 0) {
         return -1;
       } else if (ret) {
-        struct timespec now;
-        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now);
-        if (collected >= 0) {
-          results[collected] = ns_diff(cd->timer, now);
+        if (cd->valid) {
+          collected++;
         }
-        cd->timer = now;
-        collected++;
         do {
         } while (unlikely(rte_ring_enqueue(param.ring, (void *)cd) != 0));
       }
     }
   } while (collected < samples);
-  printf("rtt (us)\n");
+  printf("d0 (us), d1 (us), d2 (us), d3 (us)\n");
   for (int i = 0; i < samples; i++) {
-    printf("%lu\n", results[i]/1000);
+    printf("%lu,%lu,%lu,%lu\n",
+        results[4 * i + 0]/1000, results[4 * i + 1]/1000,
+        results[4 * i + 2]/1000, results[4 * i + 3]/1000);
   }
   return 0;
 }

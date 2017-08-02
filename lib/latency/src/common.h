@@ -3,8 +3,20 @@
  */
 #ifndef LATENCY_COMMON_H_
 #define LATENCY_COMMON_H_
+#include <sys/syscall.h>
+
 #define LATENCY_CONNECTIONS_MAX 1024
 #define LATENCY_MAX_EVENTS 256
+
+static inline int getcpu(unsigned *cpu, unsigned *node) {
+  *cpu = 0;
+  *node = 0;
+  #ifdef SYS_getcpu
+  return syscall(SYS_getcpu, cpu, node, NULL);
+  #else
+  return -1; // unavailable
+  #endif
+}
 
 struct send_responses_param {
   struct rte_ring *ring;
@@ -13,10 +25,11 @@ struct send_responses_param {
 };
 
 struct command_descriptor {
-  struct timespec timer;
-  ssize_t remaining __rte_cache_aligned;
+  struct timespec timers[4] __rte_cache_aligned;
+  ssize_t remaining;
   char *data;
   int fd;
+  int valid;
 };
 
 static inline uint64_t ns_diff(struct timespec start, struct timespec end) {
@@ -64,6 +77,9 @@ static inline int prepare_socket(int socket, int server) {
 
 static inline int receive_data(struct command_descriptor *cd, ssize_t size) {
   ssize_t remaining = cd->remaining;
+  if (remaining == size) {
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[0]);
+  }
   ssize_t rx = recv(cd->fd, &(cd->data[size - remaining]), remaining, 0);
   if (rx < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -74,6 +90,7 @@ static inline int receive_data(struct command_descriptor *cd, ssize_t size) {
     }
   }
   if (rx - remaining == 0) {
+    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[1]);
     cd->remaining = size;
     return 1;
   } else {
@@ -83,6 +100,12 @@ static inline int receive_data(struct command_descriptor *cd, ssize_t size) {
 }
 
 static void *send_responses(void *param) {
+  unsigned cpu, node;
+  if (getcpu(&cpu, &node) < 0) {
+    perror("Unable to determine cpu/node");
+    abort();
+  }
+  printf("Running writer on cpu %u node %u\n", cpu, node);
   struct send_responses_param *p = (struct send_responses_param *)param;
   struct rte_ring *ring = p->ring;
   ssize_t size = p->size;
@@ -116,6 +139,8 @@ static void *send_responses(void *param) {
         cd->remaining -= sent;
         rte_ring_enqueue(eq, responses[response]);
       } else {
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
+        cd->valid = 1;
         cd->remaining = size;
       }
     }
@@ -123,6 +148,7 @@ static void *send_responses(void *param) {
         rte_ring_free_count(eq), NULL);
     for (response = 0; response < dequeued; response++) {
       cd = (struct command_descriptor *)(responses[response]);
+      clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[2]);
       sent = send(cd->fd, cd->data, size, 0);
       if (sent < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -134,6 +160,9 @@ static void *send_responses(void *param) {
       } else if (sent < size) {
         cd->remaining = size - sent;
         rte_ring_enqueue(eq, (void *)cd);
+      } else{
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
+        cd->valid = 1;
       }
     }
   }
@@ -142,17 +171,19 @@ static void *send_responses(void *param) {
 static inline struct rte_ring *allocate_command_ring(ssize_t count,
     ssize_t size) {
   struct command_descriptor *cds = NULL;
+  char *data = NULL;
   if (posix_memalign((void **)&cds, 64,
         (count - 1) * sizeof(struct command_descriptor)) < 0) {
     perror("Unable to allocate command descriptor memory");
     return NULL;
   }
+  ssize_t aligned_size = size - size % 64 + 64;
+  if (posix_memalign((void **)&data, 64, aligned_size * (count - 1)) < 0) {
+    perror("Unable to allocate data memory");
+  }
   memset(cds, 0, (count - 1) * sizeof(struct command_descriptor));
   for (int i = 0; i < count - 1; i++) {
-    if (posix_memalign((void **)&(cds[i].data), 64, size) < 0) {
-      perror("Unable to allocate data memory");
-      return NULL;
-    }
+    cds[i].data = &data[i * aligned_size];
   }
   struct rte_ring *ring = rte_ring_create("cmd_ring", count,
       RING_F_SP_ENQ | RING_F_SC_DEQ);

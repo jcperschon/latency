@@ -76,6 +76,12 @@ static inline int create_server(const char *ip, const int port) {
 }
 
 static int serve(const char *ip, const int port, ssize_t size, int wcpu) {
+  unsigned cpu, node;
+  if (getcpu(&cpu, &node) < 0) {
+    perror("Unable to determine cpu/node");
+    return -1;
+  }
+  printf("Running server reader on cpu %u node %u \n", cpu, node);
   int server = create_server(ip, port);
   if (server < 0) {
       return -1;
@@ -127,7 +133,7 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu) {
   }
   while (1) {
     int n, i, ret;
-    n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, 0);
+    n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, -1);
     if (n < 0) {
       perror("Epoll wait error");
       return -1;
