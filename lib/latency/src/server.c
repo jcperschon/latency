@@ -131,8 +131,10 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu) {
     perror("Unable to create server writer");
     return -1;
   }
+  int n, i, c, ret;
+  void *completed[16];
   while (1) {
-    int n, i, ret;
+    c = 0;
     n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, -1);
     if (n < 0) {
       perror("Epoll wait error");
@@ -152,8 +154,7 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu) {
           perror("Unable to remove epoll file descriptor");
           return -1;
         }
-        do {
-        } while (unlikely(rte_ring_enqueue(ring, (void *)cd) != 0));
+        rte_ring_enqueue(ring, (void *)cd);
         continue;
       }
       if (cd->fd == server) {
@@ -171,8 +172,11 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu) {
         if (ret < 0) {
           return -1;
         } else if (ret) {
-          do {
-          } while (unlikely(rte_ring_enqueue(prm.ring, (void *)cd) != 0));
+          completed[c++] = (void *)cd;
+          if (c == 16 || (i == n - 1 && c > 0)) {
+            rte_ring_enqueue_bulk(prm.ring, &completed[0], c, NULL);
+            c = 0;
+          }
         }
       }
     }

@@ -109,21 +109,21 @@ static void *send_responses(void *param) {
   struct send_responses_param *p = (struct send_responses_param *)param;
   struct rte_ring *ring = p->ring;
   ssize_t size = p->size;
-  struct rte_ring *eq = rte_ring_create("tx_queue", 32,
+  struct rte_ring *eq = rte_ring_create("tx_queue", 256,
       RING_F_SP_ENQ | RING_F_SC_DEQ);
   if (eq == NULL) {
     perror("Unable to create eq");
     abort();
   }
   struct command_descriptor *cd = NULL;
-  void *responses[32];
+  void *responses[256];
   memset(responses, 0, sizeof(responses));
   unsigned dequeued;
   unsigned response;
   uint8_t eq_index = 0;
   int sent;
   while (1) {
-    dequeued = rte_ring_dequeue_burst(eq, &responses[0], 32, NULL);
+    dequeued = rte_ring_dequeue_burst(eq, &responses[0], 256, NULL);
     for (response = 0; response < dequeued; response++) {
       cd = (struct command_descriptor *)(responses[response]);
       sent = send(cd->fd, &(cd->data[size - cd->remaining]),
@@ -164,6 +164,9 @@ static void *send_responses(void *param) {
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
         cd->valid = 1;
       }
+    }
+    if ((dequeued == 0) && (rte_ring_count(eq) == 0)) {
+      _mm_pause();
     }
   }
 }

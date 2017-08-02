@@ -98,9 +98,11 @@ static int benchmark(const char *ip, const int port, const int count,
   struct command_descriptor *cd = NULL;
   struct epoll_event *events = malloc(sizeof(struct epoll_event) *
       LATENCY_MAX_EVENTS);
+  struct timespec now;
+  int n, i, c, ret;
+  void *completed[16];
   do {
-    struct timespec now;
-    int n, i, ret;
+    c = 0;
     n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, -1);
     if (n < 0) {
       perror("Epoll wait error");
@@ -123,7 +125,7 @@ static int benchmark(const char *ip, const int port, const int count,
         free(cd);
         continue;
       }
-      if (cd->valid && cd->remaining == size) {
+      if ((cd->valid == 1) && (cd->remaining == size)) {
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now);
         results[collected * 4 + 0] = ns_diff(cd->timers[0], cd->timers[1]);
         results[collected * 4 + 1] = ns_diff(cd->timers[1], cd->timers[2]);
@@ -134,11 +136,14 @@ static int benchmark(const char *ip, const int port, const int count,
       if (ret < 0) {
         return -1;
       } else if (ret) {
-        if (cd->valid) {
+        if (cd->valid == 1) {
           collected++;
         }
-        do {
-        } while (unlikely(rte_ring_enqueue(param.ring, (void *)cd) != 0));
+        completed[c++] = (void *)cd;
+        if (c == 16 || (i == n - 1 && c > 0)) {
+          rte_ring_enqueue_bulk(param.ring, &completed[0], c, NULL);
+          c = 0;
+        }
       }
     }
   } while (collected < samples);
