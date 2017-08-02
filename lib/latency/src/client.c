@@ -8,245 +8,118 @@
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include "latency/server.h"
+#include "latency/client.h"
+#include "common.h"
 
-#define LATENCY_MAX_EVENTS 256
-#define LATENCY_BACKLOG_SIZE 32
-
-static char *input;
-static char *output;
-
-struct send_responses_param {
-  struct rte_ring *ring;
-  ssize_t size;
-};
-
-struct eq_descriptor {
-  int fd;
-  ssize_t remaining;
-  struct timespec timer;
-};
-
-static inline uint64_t ns_diff(struct timespec start, struct timespec end) {
-  return (end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec;
-}
-
-static inline int setfdnonblocking(int fd) {
-  int flags, s;
-  flags = fcntl(fd, F_GETFL, 0);
-  if (flags < 0) {
-    perror("Unable to read file descriptor flags ");
-    return -1;
-  }
-  flags |= O_NONBLOCK;
-  if (fcntl (fd, F_SETFL, flags) < 0) {
-    perror("Unable to set file descriptor flags ");
-    return -1;
-  }
-  return 0;
-}
-
-static inline int prepare_socket(int socket, int server) {
-  int opt = 1;
-  struct timeval tv = {
-    .tv_sec = 5,
-    .tv_usec = 5000,
-  };
-  if (setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
-    perror("Unable to set socket option TCP_NODELAY ");
-    return -1;
-  }
-  if (server) {
-    if (setsockopt(socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-    perror("Unable to set socket option SO_REUSEADDR ");
-    return -1;
-    }
-  }
-  if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (char *)(&tv),
-    sizeof(struct timeval)) < 0) {
-    perror("Unable to set socket option SO_RCVTIMEO ");
-    return -1;
-  }
-  return 0;
-}
-
-static inline int receive_data(struct eq_descriptor *eqd, ssize_t size) {
-  ssize_t remaining = eqd->remaining;
-  ssize_t rx = recv(eqd->fd, &input[size - remaining], remaining, 0);
-  if (rx < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      return 0;
-    } else {
-      perror("Unable to read file descriptor ");
-      return -1;
-    }
-  }
-  if (rx - remaining == 0) {
-    eqd->remaining = size;
-    return 1;
-  } else {
-    eqd->remaining -= rx;
-    return 0;
-  }
-}
-
-static void *send_responses(void *param) {
-  struct rte_ring *ring = ((struct send_responses_param *)param)->ring;
-  ssize_t size = ((struct send_responses_param *)param)->size;
-  struct rte_ring *eq = rte_ring_create("tx_queue", 32,
-      RING_F_SP_ENQ | RING_F_SC_DEQ);
-  if (eq == NULL) {
-    perror("Unable to create eq ");
-    abort();
-  }
-  struct eq_descriptor *eqd;
-  void *responses[32];
-  memset(responses, 0, sizeof(responses));
-  unsigned dequeued;
-  unsigned response;
-  uint8_t eq_index = 0;
-  int fd;
-  int sent;
-  while (1) {
-    dequeued = rte_ring_dequeue_burst(eq, &responses[0], 32, NULL);
-    for (response = 0; response < dequeued; response++) {
-      eqd = (struct eq_descriptor *)(responses[response]);
-      sent = send(eqd->fd, &output[size - eqd->remaining],
-          eqd->remaining, 0);
-      if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          rte_ring_enqueue(eq, responses[response]);
-        } else {
-          perror("Unable to send data ");
-          abort();
-        }
-      } else if (sent < size) {
-        eqd->remaining -= sent;
-        rte_ring_enqueue(eq, responses[response]);
-      } else {
-        eqd->remaining = size;
-      }
-    }
-    dequeued = rte_ring_dequeue_burst(ring, &responses[0],
-        rte_ring_free_count(eq), NULL);
-    for (response = 0; response < dequeued; response++) {
-      eqd = (struct eq_descriptor *)(responses[response]);
-      sent = send(eqd->fd, (void *)output, size, 0);
-      if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          rte_ring_enqueue(eq, (void *)eqd);
-        } else {
-          perror("Unable to send data ");
-          abort();
-        }
-      } else if (sent < size) {
-        eqd->remaining = size - sent;
-        rte_ring_enqueue(eq, (void *)eqd);
-      }
-    }
-  }
-}
-
-int benchmark(const char *host, const int port, const int count, int samples, ssize_t size) {
+int create_clients(const char *host, const int port, const int count,
+    ssize_t size, int eserver, struct rte_ring *cds, struct rte_ring *worker) {
   struct sockaddr_in address;
-  input = malloc(size);
-  output = malloc(size);
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(port);
   inet_aton(host, &address.sin_addr);
-  int ret;
-  int eserver = epoll_create1(0);
-  int collected = -count;
-  if (eserver < 0) {
-    perror("Unable to create epoll file descriptor ");
-    return -1;
-  }
-  struct eq_descriptor *eqd = NULL;
+  struct command_descriptor *cd = NULL;
   struct epoll_event ev = {
     .events = EPOLLIN | EPOLLRDHUP | EPOLLPRI,
   };
-  struct epoll_event *events = malloc(sizeof(struct epoll_event) * LATENCY_MAX_EVENTS);
-  struct send_responses_param param = {
-    .ring = rte_ring_create("tx_queue", 1024, RING_F_SP_ENQ | RING_F_SC_DEQ),
-    .size = size,
-  };
-  if (param.ring == NULL) {
-    perror("Unable to create ring ");
-    return -1;
-  }
   for (int i = 0; i < count; i++) {
     int client = socket(AF_INET, SOCK_STREAM, 0);
-    if (prepare_socket(client, 1) < 0) {
+    if (prepare_socket(client, 0) < 0) {
       return -1;
     }
     if (connect(client, (struct sockaddr *)&address, sizeof(address)) < 0) {
-      perror("Unable to connect to server ");
+      perror("Unable to connect to server");
       return -1;
     }
     if (setfdnonblocking(client) < 0) {
       return -1;
     }
-    eqd = malloc(sizeof(struct eq_descriptor));
-    if (eqd == NULL) {
-      perror("Unable to allocate eq descriptor ");
-      return -1;
-    }
-    eqd->fd = client;
-    eqd->remaining = size;
-    ev.data.ptr = (void *)eqd;
+    do {
+    } while (unlikely(rte_ring_dequeue(cds, (void **)&cd) != 0));
+    cd->fd = client;
+    cd->remaining = size;
+    ev.data.ptr = (void *)cd;
     if (epoll_ctl(eserver, EPOLL_CTL_ADD, client, &ev) < 0) {
-      perror("Unable to add client to epoll file descriptor ");
+      perror("Unable to add client to epoll file descriptor");
       return -1;
     }
-    rte_ring_enqueue(param.ring, (void *)eqd);
-    eqd = NULL;
+    do {
+    } while (unlikely(rte_ring_enqueue(worker, (void *)cd) != 0));
+  }
+  return 0;
+}
+
+int benchmark(const char *host, const int port, const int count,
+    int samples, ssize_t size) {
+  int collected = -count;
+  int eserver = epoll_create1(0);
+  if (eserver < 0) {
+    perror("Unable to create epoll file descriptor");
+    return -1;
+  }
+  struct rte_ring *ring = allocate_command_ring(LATENCY_CONNECTIONS_MAX, size);
+  if (ring == NULL) {
+    return -1;
+  }
+  struct send_responses_param param = {
+    .ring = rte_ring_create("tx_queue", 1024, RING_F_SP_ENQ | RING_F_SC_DEQ),
+    .size = size,
+    .run = 1,
+  };
+  if (param.ring == NULL) {
+    perror("Unable to create ring");
+    return -1;
+  }
+  if (create_clients(host, port, count, size, eserver, ring, param.ring) < 0) {
+    return -1;
   }
   uint64_t *results = malloc(sizeof(uint64_t) * samples);
   if (results == NULL) {
-    perror("Unable to buffer results ");
+    perror("Unable to buffer results");
     return -1;
   }
   pthread_t worker;
   pthread_create(&worker, NULL, send_responses, (void *)&param);
+  struct command_descriptor *cd = NULL;
+  struct epoll_event *events = malloc(sizeof(struct epoll_event) *
+      LATENCY_MAX_EVENTS);
   do {
-    int n, i, fd;
+    int n, i, ret;
+    struct timespec now;
     n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, 0);
     if (n < 0) {
-      perror("Epoll wait error ");
+      perror("Epoll wait error");
       return -1;
     }
     for (i = 0; i < n; i++) {
-      eqd = (struct eq_descriptor *)events[i].data.ptr;
-      fd = eqd->fd;
+      cd = (struct command_descriptor *)events[i].data.ptr;
       if ((events[i].events & EPOLLERR) ||
           (events[i].events & EPOLLHUP) ||
           (!(events[i].events & EPOLLIN))) {
-        fprintf(stderr, "epoll error\n");
-        if (close(events[i].data.fd) < 0) {
-          perror("Unable to close file descriptor ");
+        fprintf(stderr,"epoll error\n");
+        if (close(cd->fd) < 0) {
+          perror("Unable to close file descriptor");
           return -1;
         }
-        if (epoll_ctl(eserver, EPOLL_CTL_DEL, events[i].data.fd, &ev) < 0) {
-          perror("Unable to remove epoll file descriptor ");
+        if (epoll_ctl(eserver, EPOLL_CTL_DEL, cd->fd, events) < 0) {
+          perror("Unable to remove epoll file descriptor");
           return -1;
         }
-        free(eqd);
+        free(cd);
         continue;
       }
-      ret = receive_data(eqd, size);
+      ret = receive_data(cd, size);
       if (ret < 0) {
         return -1;
       } else if (ret) {
-        struct timespec now;
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now);
         if (collected >= 0) {
-          results[collected] = ns_diff(eqd->timer, now);
+          results[collected] = ns_diff(cd->timer, now);
         }
-        eqd->timer = now;
+        cd->timer = now;
         collected++;
         do {
-        } while (!unlikely(rte_ring_enqueue(param.ring, (void *)eqd)));
+        } while (unlikely(rte_ring_enqueue(param.ring, (void *)cd) != 0));
       }
     }
   } while (collected < samples);
