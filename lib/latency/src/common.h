@@ -27,6 +27,7 @@ struct send_responses_param {
 struct command_descriptor {
   struct timespec timers[4] __rte_cache_aligned;
   ssize_t remaining;
+  ssize_t size;
   char *data;
   int fd;
   int valid;
@@ -49,6 +50,32 @@ static inline int setfdnonblocking(int fd) {
     return -1;
   }
   return 0;
+}
+
+static inline int process_eq(void **responses, struct rte_ring *eq) {
+  struct command_descriptor *cd;
+  ssize_t sent;
+  unsigned dequeued = rte_ring_dequeue_burst(eq, responses,
+      LATENCY_CONNECTIONS_MAX - 1, NULL);
+  for (unsigned response = 0; response < dequeued; response++) {
+    cd = (struct command_descriptor *)responses[response];
+    sent = send(cd->fd, &(cd->data[cd->size - cd->remaining]),
+        cd->remaining, 0);
+    if (sent < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        rte_ring_enqueue(eq, (void *)cd);
+      } else {
+        return -1;
+      }
+    } else if (sent < cd->remaining) {
+      cd->remaining -= sent;
+      rte_ring_enqueue(eq, (void *)cd);
+    } else {
+      clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
+      cd->remaining = cd->size;
+      cd->valid++;
+    }
+  }
 }
 
 static inline int prepare_socket(int socket, int server) {
@@ -75,12 +102,12 @@ static inline int prepare_socket(int socket, int server) {
   return 0;
 }
 
-static inline int receive_data(struct command_descriptor *cd, ssize_t size) {
-  ssize_t remaining = cd->remaining;
-  if (remaining == size) {
+static inline int receive_data(struct command_descriptor *cd) {
+  if (cd->remaining == cd->size) {
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[0]);
   }
-  ssize_t rx = recv(cd->fd, &(cd->data[size - remaining]), remaining, 0);
+  ssize_t rx = recv(cd->fd, &(cd->data[cd->size - cd->remaining]),
+      cd->remaining, 0);
   if (rx < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       return 0;
@@ -89,85 +116,13 @@ static inline int receive_data(struct command_descriptor *cd, ssize_t size) {
       return -1;
     }
   }
-  if (rx - remaining == 0) {
+  if (rx - cd->remaining == 0) {
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[1]);
-    cd->remaining = size;
+    cd->remaining = cd->size;
     return 1;
   } else {
     cd->remaining -= rx;
     return 0;
-  }
-}
-
-static void *send_responses(void *param) {
-  unsigned cpu, node;
-  if (getcpu(&cpu, &node) < 0) {
-    perror("Unable to determine cpu/node");
-    abort();
-  }
-  printf("Running writer on cpu %u node %u\n", cpu, node);
-  struct send_responses_param *p = (struct send_responses_param *)param;
-  struct rte_ring *ring = p->ring;
-  ssize_t size = p->size;
-  struct rte_ring *eq = rte_ring_create("tx_queue", 256,
-      RING_F_SP_ENQ | RING_F_SC_DEQ);
-  if (eq == NULL) {
-    perror("Unable to create eq");
-    abort();
-  }
-  struct command_descriptor *cd = NULL;
-  void *responses[256];
-  memset(responses, 0, sizeof(responses));
-  unsigned dequeued;
-  unsigned response;
-  uint8_t eq_index = 0;
-  int sent;
-  while (1) {
-    dequeued = rte_ring_dequeue_burst(eq, &responses[0], 256, NULL);
-    for (response = 0; response < dequeued; response++) {
-      cd = (struct command_descriptor *)(responses[response]);
-      sent = send(cd->fd, &(cd->data[size - cd->remaining]),
-          cd->remaining, 0);
-      if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          rte_ring_enqueue(eq, responses[response]);
-        } else {
-          perror("Unable to send data");
-          abort();
-        }
-      } else if (sent < size) {
-        cd->remaining -= sent;
-        rte_ring_enqueue(eq, responses[response]);
-      } else {
-        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
-        cd->valid = 1;
-        cd->remaining = size;
-      }
-    }
-    dequeued = rte_ring_dequeue_burst(ring, &responses[0],
-        rte_ring_free_count(eq), NULL);
-    for (response = 0; response < dequeued; response++) {
-      cd = (struct command_descriptor *)(responses[response]);
-      clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[2]);
-      sent = send(cd->fd, cd->data, size, 0);
-      if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          rte_ring_enqueue(eq, (void *)cd);
-        } else {
-          perror("Unable to send data");
-          abort();
-        }
-      } else if (sent < size) {
-        cd->remaining = size - sent;
-        rte_ring_enqueue(eq, (void *)cd);
-      } else{
-        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
-        cd->valid = 1;
-      }
-    }
-    if ((dequeued == 0) && (rte_ring_count(eq) == 0)) {
-      _mm_pause();
-    }
   }
 }
 
@@ -186,6 +141,8 @@ static inline struct rte_ring *allocate_command_ring(ssize_t count,
   }
   memset(cds, 0, (count - 1) * sizeof(struct command_descriptor));
   for (int i = 0; i < count - 1; i++) {
+    cds[i].remaining = size;
+    cds[i].size = size;
     cds[i].data = &data[i * aligned_size];
   }
   struct rte_ring *ring = rte_ring_create("cmd_ring", count,

@@ -15,7 +15,7 @@
 #define LATENCY_BACKLOG_SIZE 32
 
 static inline int accept_and_add_to_epoll_fd(int server, int eserver,
-    ssize_t size, struct rte_ring *ring) {
+    struct rte_ring *ring) {
   struct sockaddr_in client_addr;
   socklen_t len = sizeof(client_addr);
   int client = accept(server, (struct sockaddr *)&client_addr, &len);
@@ -39,7 +39,6 @@ static inline int accept_and_add_to_epoll_fd(int server, int eserver,
     return -1;
   }
   cd->fd = client;
-  cd->remaining = size;
   struct epoll_event ev = {
     .data.ptr = (void *)cd,
     .events = EPOLLIN | EPOLLRDHUP | EPOLLPRI,
@@ -49,6 +48,74 @@ static inline int accept_and_add_to_epoll_fd(int server, int eserver,
     return -1;
   }
   return 0;
+}
+
+static int server_loop(const int server, const int eserver, struct epoll_event *events,
+    void **responses, struct rte_ring *eq, struct rte_ring *ring, uint8_t *run) {
+  struct command_descriptor *cd = NULL;
+  ssize_t sent;
+  struct epoll_event ev = {0};
+  int n, i, ret;
+  while (*run == 1) {
+    process_eq(responses, eq);
+    if (rte_ring_count(eq) == 0) {
+      n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, -1);
+    } else {
+      n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, 0);
+    }
+    if (n < 0) {
+      perror("Epoll wait error");
+      return -1;
+    }
+    for (i = 0; i < n; i++) {
+      cd = (struct command_descriptor *)events[i].data.ptr;
+      if ((events[i].events & EPOLLERR) ||
+          (events[i].events & EPOLLHUP) ||
+          (!(events[i].events & EPOLLIN))) {
+        fprintf(stderr,"epoll error\n");
+        if (close(cd->fd) < 0) {
+          perror("Unable to close file descriptor");
+          return -1;
+        }
+        if (epoll_ctl(eserver, EPOLL_CTL_DEL, cd->fd, &ev) < 0) {
+          perror("Unable to remove epoll file descriptor");
+          return -1;
+        }
+        rte_ring_enqueue(ring, (void *)cd);
+        continue;
+      } else {
+        if (cd->fd == server) {
+          while (1) {
+            ret = accept_and_add_to_epoll_fd(server, eserver, ring);
+            if (ret < 0) {
+              return -1;
+            } else if (ret) {
+              break;
+            }
+          }
+          continue;
+        } else {
+          ret = receive_data(cd);
+          if (ret < 0) {
+            return -1;
+          } else if (ret) {
+            sent = send(cd->fd, cd->data, cd->size, 0);
+            if (sent < 0) {
+              if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                rte_ring_enqueue(eq, (void *)cd);
+              } else {
+                perror("Unable to send data");
+                return -1;
+              }
+            } else if (sent < cd->remaining) {
+              cd->remaining -= sent;
+              rte_ring_enqueue(eq, (void *)cd);
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 static inline int create_server(const char *ip, const int port) {
@@ -75,7 +142,7 @@ static inline int create_server(const char *ip, const int port) {
   return server;
 }
 
-static int serve(const char *ip, const int port, ssize_t size, int wcpu) {
+static int serve(const char *ip, const int port, ssize_t size, int wcpu, uint8_t *run) {
   unsigned cpu, node;
   if (getcpu(&cpu, &node) < 0) {
     perror("Unable to determine cpu/node");
@@ -123,100 +190,25 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu) {
     perror("Unable to create response area");
     return -1;
   }
-  unsigned response;
-  unsigned dequeued;
-  ssize_t sent;
-  int n, i, ret;
-  while (1) {
-    dequeued = rte_ring_dequeue_burst(eq, responses,
-        LATENCY_CONNECTIONS_MAX - 1, NULL);
-    for (response = 0; response < dequeued; response++) {
-      cd = (struct command_descriptor *)responses[response];
-      sent = send(cd->fd, &(cd->data[size - cd->remaining]),
-          cd->remaining, 0);
-      if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          rte_ring_enqueue(eq, (void *)cd);
-        } else {
-          perror("Unable to send data");
-          return -1;
-        }
-      } else if (sent < size) {
-        cd->remaining -= sent;
-        rte_ring_enqueue(eq, (void *)cd);
-      } else {
-        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
-        cd->valid = 1;
-        cd->remaining = size;
-      }
-    }
-    if (rte_ring_count(eq) == 0) {
-      n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, -1);
-    } else {
-      n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, 0);
-    }
-    if (n < 0) {
-      perror("Epoll wait error");
-      return -1;
-    }
-    for (i = 0; i < n; i++) {
-      cd = (struct command_descriptor *)events[i].data.ptr;
-      if ((events[i].events & EPOLLERR) ||
-          (events[i].events & EPOLLHUP) ||
-          (!(events[i].events & EPOLLIN))) {
-        fprintf(stderr,"epoll error\n");
-        if (close(cd->fd) < 0) {
-          perror("Unable to close file descriptor");
-          return -1;
-        }
-        if (epoll_ctl(eserver, EPOLL_CTL_DEL, cd->fd, &ev) < 0) {
-          perror("Unable to remove epoll file descriptor");
-          return -1;
-        }
-        rte_ring_enqueue(ring, (void *)cd);
-        continue;
-      }
-      if (cd->fd == server) {
-        while (1) {
-          ret = accept_and_add_to_epoll_fd(server, eserver, size, ring);
-          if (ret < 0) {
-            return -1;
-          } else if (ret) {
-            break;
-          }
-        }
-        continue;
-      } else {
-        ret = receive_data(cd, size);
-        if (ret < 0) {
-          return -1;
-        } else if (ret) {
-          clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[2]);
-          sent = send(cd->fd, cd->data, size, 0);
-          if (sent < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-              rte_ring_enqueue(eq, (void *)cd);
-            } else {
-              perror("Unable to send data");
-              return -1;
-            }
-          } else if (sent < size) {
-            cd->remaining = size - sent;
-            rte_ring_enqueue(eq, (void *)cd);
-          } else{
-            clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
-            cd->valid = 1;
-          }
-        }
-      }
-    }
+  if (server_loop(server, eserver, events, responses, eq, ring, run) < 0) {
+    return -1;
   }
+  free(events);
+  free(*responses);
+  free(eq);
+  free(ring);
 }
 
 static void *do_server(void *param) {
   struct server_args *p = (struct server_args *)param;
-  uint64_t r = serve(p->ip, p->port, p->size, p->wcpu);
+  p->run = 1;
+  uint64_t r = serve(p->ip, p->port, p->size, p->wcpu, &p->run);
   pthread_exit((void *)r);
+}
+
+void kill_server(pthread_t *thread, struct server_args *p, void **ret) {
+  p->run = 0;
+  pthread_join(*thread, ret);
 }
 
 void run_server(pthread_t *thread, struct server_args *p) {

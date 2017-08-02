@@ -16,9 +16,12 @@ struct server_args {
   ssize_t size;
   int rcpu;
   int wcpu;
+  uint8_t run;
 };
 
 void run_server(pthread_t *thread, struct server_args *p);
+
+void kill_server(pthread_t *thread, struct server_args *p, void **ret);
 
 #ifdef __cplusplus
 }
