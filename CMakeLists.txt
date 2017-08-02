@@ -9,8 +9,9 @@ set(MEMORYCHECK_COMMAND_OPTIONS
 include(CTest)
 
 # Project configuration
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D _GNU_SOURCE")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -D _GNU_SOURCE")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 # Function for dependency checking
 function(assert_library_exists LIB)
     set(_LIB_NAMES ${ARGV})

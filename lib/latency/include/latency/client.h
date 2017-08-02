@@ -4,13 +4,24 @@
 #ifndef LATENCY_CLIENT_H_
 #define LATENCY_CLIENT_H_
 
+#include <pthread.h>
 #include <sys/socket.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-int benchmark(const char *host, const int port, const int count, int samples, ssize_t size);
+struct client_args {
+  const char *ip;
+  ssize_t size;
+  const int port;
+  int count;
+  int samples;
+  int rcpu;
+  int wcpu;
+};
+
+void run_client(pthread_t *thread, struct client_args *p);
 
 #ifdef __cplusplus
 }

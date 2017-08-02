@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include "latency/server.h"
+#include "latency/scheduler.h"
 #include "common.h"
 
 #define LATENCY_BACKLOG_SIZE 32
@@ -50,12 +51,12 @@ static inline int accept_and_add_to_epoll_fd(int server, int eserver,
   return 0;
 }
 
-static inline int create_server(const char *host, const int port) {
+static inline int create_server(const char *ip, const int port) {
   struct sockaddr_in address;
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(port);
-  inet_aton(host, &address.sin_addr);
+  inet_aton(ip, &address.sin_addr);
   int server = socket(AF_INET, SOCK_STREAM, 0);
   if (prepare_socket(server, 1) < 0) {
     return -1;
@@ -74,8 +75,8 @@ static inline int create_server(const char *host, const int port) {
   return server;
 }
 
-int serve(const char *host, const int port, ssize_t size) {
-  int server = create_server(host, port);
+static int serve(const char *ip, const int port, ssize_t size, int wcpu) {
+  int server = create_server(ip, port);
   if (server < 0) {
       return -1;
   }
@@ -105,17 +106,25 @@ int serve(const char *host, const int port, ssize_t size) {
     perror("Unable to allocate memory for events");
     return -1;
   }
-  struct send_responses_param param = {
+  struct send_responses_param prm = {
     .ring = rte_ring_create("tx_queue", 1024, RING_F_SP_ENQ | RING_F_SC_DEQ),
     .size = size,
     .run = 1,
   };
-  if (param.ring == NULL) {
+  if (prm.ring == NULL) {
     perror("Unable to create ring");
     return -1;
   }
   pthread_t worker;
-  pthread_create(&worker, NULL, send_responses, (void *)&param);
+  pthread_attr_t attr;
+  if (set_thread_priority_max(&attr, wcpu)) {
+    perror("Unable to configure server writer");
+    return -1;
+  }
+  if (pthread_create(&worker, &attr, send_responses, (void *)&prm) < 0) {
+    perror("Unable to create server writer");
+    return -1;
+  }
   while (1) {
     int n, i, ret;
     n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, 0);
@@ -157,9 +166,27 @@ int serve(const char *host, const int port, ssize_t size) {
           return -1;
         } else if (ret) {
           do {
-          } while (unlikely(rte_ring_enqueue(param.ring, (void *)cd) != 0));
+          } while (unlikely(rte_ring_enqueue(prm.ring, (void *)cd) != 0));
         }
       }
     }
+  }
+}
+
+static void *do_server(void *param) {
+  struct server_args *p = (struct server_args *)param;
+  uint64_t r = serve(p->ip, p->port, p->size, p->wcpu);
+  pthread_exit((void *)r);
+}
+
+void run_server(pthread_t *thread, struct server_args *p) {
+  pthread_attr_t attr;
+  if (set_thread_priority_max(&attr, p->rcpu) < 0) {
+    perror("Unable to configure server");
+    abort();
+  }
+  if (pthread_create(thread, &attr, do_server, (void *)p) < 0) {
+    perror("Unable to start server");
+    abort();
   }
 }

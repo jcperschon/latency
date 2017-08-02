@@ -99,7 +99,7 @@ static void *send_responses(void *param) {
   unsigned response;
   uint8_t eq_index = 0;
   int sent;
-  while (p->run) {
+  while (1) {
     dequeued = rte_ring_dequeue_burst(eq, &responses[0], 32, NULL);
     for (response = 0; response < dequeued; response++) {
       cd = (struct command_descriptor *)(responses[response]);
@@ -139,7 +139,8 @@ static void *send_responses(void *param) {
   }
 }
 
-static inline struct rte_ring *allocate_command_ring(ssize_t count, ssize_t size) {
+static inline struct rte_ring *allocate_command_ring(ssize_t count,
+    ssize_t size) {
   struct command_descriptor *cds = NULL;
   if (posix_memalign((void **)&cds, 64,
         (count - 1) * sizeof(struct command_descriptor)) < 0) {

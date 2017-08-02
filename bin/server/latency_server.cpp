@@ -2,17 +2,21 @@
  * Copyright 2017 HoneycombData
  */
 #include <getopt.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <iostream>
 #include <latency/server.h>
+#include <latency/scheduler.h>
 
 static struct option long_options[] = {
   {"help", no_argument, NULL, 'h'},
   {"ip", required_argument, NULL, 'i'},
   {"port", required_argument, NULL, 'p'},
   {"size", required_argument, NULL, 's'},
+  {"r-cpu", required_argument, NULL, 'r'},
+  {"w-cpu", required_argument, NULL, 'w'},
   {0, 0, 0, 0},
 };
 
@@ -21,6 +25,8 @@ static char help[][80] = {
   "IP address of remote latency service (default 127.0.0.1)",
   "TCP port used by remote latency service (default 1234)",
   "Round trip payload size (default 1)",
+  "Epoll reader CPU affinity (default none)",
+  "Socket writer CPU affinity (default none)", 
 };
 
 void usage() {
@@ -59,9 +65,11 @@ int main(int argc, char **argv) {
   std::string ip = "127.0.0.1";
   int port = 1234;
   int size = 1;
+  int rcpu = -1;
+  int wcpu = -1;
   while (1) {
     int option_index = 0;
-    c = getopt_long(argc, argv, "hi:p:s:",
+    c = getopt_long(argc, argv, "hi:p:s:r:w:",
         long_options, &option_index);
     if (c == -1) {
       break;
@@ -79,10 +87,27 @@ int main(int argc, char **argv) {
       case 's':
         size = std::stoi(optarg);
         break;
+      case 'r':
+        rcpu = std::stoi(optarg);
+        break;
+      case 'w':
+        wcpu = std::stoi(optarg);
+        break;
       default:
         usage();
         return -1;
     }
   }
-  return serve(ip.c_str(), port, size);
+  pthread_t server;
+  struct server_args p = {
+    .ip = ip.c_str(),
+    .port = port,
+    .size = size,
+    .rcpu = rcpu,
+    .wcpu = wcpu,
+  };
+  void *ret = NULL;
+  run_server(&server, &p);
+  pthread_join(server, &ret);
+  return *((int *)ret);
 }

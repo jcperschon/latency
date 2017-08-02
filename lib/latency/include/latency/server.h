@@ -10,7 +10,15 @@
 extern "C" {
 #endif
 
-int serve(const char *host, const int port, ssize_t size);
+struct server_args {
+  const char *ip;
+  const int port;
+  ssize_t size;
+  int rcpu;
+  int wcpu;
+};
+
+void run_server(pthread_t *thread, struct server_args *p);
 
 #ifdef __cplusplus
 }

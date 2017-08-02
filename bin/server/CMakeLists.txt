@@ -2,6 +2,7 @@
 add_executable(latency_server latency_server.cpp)
 target_link_libraries(latency_server
     latency
+    pthread
 )
 
 # Install latency server executable

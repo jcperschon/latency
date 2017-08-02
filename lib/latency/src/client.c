@@ -9,15 +9,16 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include "latency/client.h"
+#include "latency/scheduler.h"
 #include "common.h"
 
-int create_clients(const char *host, const int port, const int count,
+int create_clients(const char *ip, const int port, const int count,
     ssize_t size, int eserver, struct rte_ring *cds, struct rte_ring *worker) {
   struct sockaddr_in address;
   memset(&address, 0, sizeof(address));
   address.sin_family = AF_INET;
   address.sin_port = htons(port);
-  inet_aton(host, &address.sin_addr);
+  inet_aton(ip, &address.sin_addr);
   struct command_descriptor *cd = NULL;
   struct epoll_event ev = {
     .events = EPOLLIN | EPOLLRDHUP | EPOLLPRI,
@@ -49,8 +50,9 @@ int create_clients(const char *host, const int port, const int count,
   return 0;
 }
 
-int benchmark(const char *host, const int port, const int count,
-    int samples, ssize_t size) {
+static int benchmark(const char *ip, const int port, const int count,
+    int samples, ssize_t size, int wcpu) {
+  printf("Running client\n");
   int collected = -count;
   int eserver = epoll_create1(0);
   if (eserver < 0) {
@@ -70,7 +72,7 @@ int benchmark(const char *host, const int port, const int count,
     perror("Unable to create ring");
     return -1;
   }
-  if (create_clients(host, port, count, size, eserver, ring, param.ring) < 0) {
+  if (create_clients(ip, port, count, size, eserver, ring, param.ring) < 0) {
     return -1;
   }
   uint64_t *results = malloc(sizeof(uint64_t) * samples);
@@ -79,13 +81,20 @@ int benchmark(const char *host, const int port, const int count,
     return -1;
   }
   pthread_t worker;
-  pthread_create(&worker, NULL, send_responses, (void *)&param);
+  pthread_attr_t attr;
+  if (set_thread_priority_max(&attr, wcpu) < 0) {
+    perror("Unable to configure client writer");
+    return -1;
+  }
+  if (pthread_create(&worker, &attr, send_responses, (void *)&param)) {
+    perror("Unable to start client writer");
+    return -1;
+  }
   struct command_descriptor *cd = NULL;
   struct epoll_event *events = malloc(sizeof(struct epoll_event) *
       LATENCY_MAX_EVENTS);
   do {
     int n, i, ret;
-    struct timespec now;
     n = epoll_wait(eserver, events, LATENCY_MAX_EVENTS, 0);
     if (n < 0) {
       perror("Epoll wait error");
@@ -112,6 +121,7 @@ int benchmark(const char *host, const int port, const int count,
       if (ret < 0) {
         return -1;
       } else if (ret) {
+        struct timespec now;
         clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now);
         if (collected >= 0) {
           results[collected] = ns_diff(cd->timer, now);
@@ -128,4 +138,24 @@ int benchmark(const char *host, const int port, const int count,
     printf("%lu\n", results[i]/1000);
   }
   return 0;
+}
+
+static void *do_client(void *param) {
+  printf("Client thread\n");
+  struct client_args *p = (struct client_args *)param;
+  uint64_t r = benchmark(p->ip, p->port, p->count, p->samples,
+      p->size, p->wcpu);
+  pthread_exit((void *)r);
+}
+
+void run_client(pthread_t *thread, struct client_args *p) {
+  pthread_attr_t attr;
+  if (set_thread_priority_max(&attr, p->rcpu) < 0) {
+    perror("Unable to configure client");
+    abort();
+  }
+  if (pthread_create(thread, &attr, do_client, (void *)p) < 0) {
+    perror("Unable to start client");
+    abort();
+  }
 }

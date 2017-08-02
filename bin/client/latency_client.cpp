@@ -25,6 +25,8 @@ static char help[][80] = {
   "Number of connections to run in parallel (default 1)",
   "Number of samples to collect (default 1)",
   "Round trip payload size (default 1)",
+  "Epoll reader CPU affinity (default none)",
+  "Socket writer CPU affinity (default none)", 
 };
 
 void usage() {
@@ -65,9 +67,11 @@ int main(int argc, char **argv) {
   int connections = 1;
   int samples = 1;
   int size = 1;
+  int wcpu = -1;
+  int rcpu = -1;
   while (1) {
     int option_index = 0;
-    c = getopt_long(argc, argv, "hi:p:c:n:s:",
+    c = getopt_long(argc, argv, "hi:p:c:n:s:r:w:",
         long_options, &option_index);
     if (c == -1) {
       break;
@@ -91,10 +95,29 @@ int main(int argc, char **argv) {
       case 's':
         size = std::stoi(optarg);
         break;
+      case 'r':
+        rcpu = std::stoi(optarg);
+        break;
+      case 'w':
+        wcpu = std::stoi(optarg);
+        break;
       default:
         usage();
         return -1;
     }
   }
-  return benchmark(ip.c_str(), port, connections, samples, size);
+  pthread_t client;
+  struct client_args p = {
+    .ip = ip.c_str(),
+    .size = size,
+    .port = port,
+    .count = connections,
+    .samples = samples,
+    .rcpu = rcpu,
+    .wcpu = wcpu,
+  };
+  void *ret = NULL;
+  run_client(&client, &p);
+  pthread_join(client, &ret);
+  return *((int *)ret);
 }
