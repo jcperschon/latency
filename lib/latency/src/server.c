@@ -73,12 +73,12 @@ static int server_loop(const int server, const int eserver, struct epoll_event *
           (events[i].events & EPOLLHUP) ||
           (!(events[i].events & EPOLLIN))) {
         fprintf(stderr,"epoll error\n");
-        if (close(cd->fd) < 0) {
-          perror("Unable to close file descriptor");
-          return -1;
-        }
         if (epoll_ctl(eserver, EPOLL_CTL_DEL, cd->fd, &ev) < 0) {
           perror("Unable to remove epoll file descriptor");
+          return -1;
+        }
+        if (close(cd->fd) < 0) {
+          perror("Unable to close file descriptor");
           return -1;
         }
         rte_ring_enqueue(ring, (void *)cd);
