@@ -8,6 +8,16 @@
 #define LATENCY_CONNECTIONS_MAX 1024
 #define LATENCY_MAX_EVENTS 256
 
+
+/*static inline uint64_t rdtsc() {
+  uint32_t lo, hi;
+  asm volatile (
+    "xorl %%eax,%%eax \n        cpuid"
+    ::: "%rax", "%rbx", "%rcx", "%rdx");
+  asm volatile ("rdtsc" : "=a" (lo), "=d" (hi));
+  return (uint64_t)hi << 32 | lo;
+}*/
+
 static inline int getcpu(unsigned *cpu, unsigned *node) {
   *cpu = 0;
   *node = 0;

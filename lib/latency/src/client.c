@@ -209,7 +209,7 @@ static int benchmark(const char *ip, const int port, const int count,
     return -1;
   }
   struct epoll_event *events = malloc(sizeof(struct epoll_event) *
-      (LATENCY_MAX_EVENTS - 1));
+      LATENCY_MAX_EVENTS);
   if (events == NULL) {
     perror("Unable to create events area");
     return -1;
