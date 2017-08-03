@@ -72,7 +72,6 @@ static int server_loop(const int server, const int eserver, struct epoll_event *
       if ((events[i].events & EPOLLERR) ||
           (events[i].events & EPOLLHUP) ||
           (!(events[i].events & EPOLLIN))) {
-        fprintf(stderr,"epoll error\n");
         if (epoll_ctl(eserver, EPOLL_CTL_DEL, cd->fd, &ev) < 0) {
           perror("Unable to remove epoll file descriptor");
           return -1;

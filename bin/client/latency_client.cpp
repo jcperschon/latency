@@ -116,8 +116,6 @@ int main(int argc, char **argv) {
     .rcpu = rcpu,
     .wcpu = wcpu,
   };
-  void *ret = NULL;
   run_client(&client, &p);
-  pthread_join(client, &ret);
-  return *((int *)ret);
+  pthread_join(client, NULL);
 }
