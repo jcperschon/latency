@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
   int c = 0;
   std::string ip = "127.0.0.1";
   int port = 1234;
-  int size = 1;
+  int size = 8;
   int rcpu = -1;
   int wcpu = -1;
   while (1) {

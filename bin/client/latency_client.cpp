@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
   int port = 1234;
   int connections = 1;
   int samples = 1;
-  int size = 1;
+  int size = 8;
   int wcpu = -1;
   int rcpu = -1;
   while (1) {

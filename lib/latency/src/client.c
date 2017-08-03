@@ -160,7 +160,7 @@ static int client_loop(const int samples, const int epoll_fd,
       }
     }
   } while (sample < samples);
-  fprintf(stdout, "d0 (us), d1 (us), d2 (us), d3 (us)\n");
+  fprintf(stdout, "d0 (us), d1 (us), d2 (us)\n");
   for (i = 0; i < samples; i++) {
     fprintf(stdout, "%lu,%lu,%lu\n",
         records[3 * i + 0]/1000,

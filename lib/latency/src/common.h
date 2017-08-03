@@ -105,7 +105,6 @@ static inline int receive_data(struct command_descriptor *cd) {
     }
   }
   if (rx - cd->transfer_remaining == 0) {
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[1]);
     cd->transfer_remaining = cd->transfer_size;
     return 1;
   } else {
@@ -135,6 +134,7 @@ static inline int allocate_command_ring(ssize_t count, ssize_t transfer_size,
     c[i].transfer_remaining = transfer_size;
     c[i].transfer_size = transfer_size;
     c[i].data = &d[i * aligned_size];
+    c[i].first_recv_after_send = 1;
   }
   r = rte_ring_create("cmd_ring", count,
       RING_F_SP_ENQ | RING_F_SC_DEQ);

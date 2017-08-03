@@ -41,7 +41,6 @@ TEST(TestLatencyGroup, TestClientServer) {
   usleep(500000);
   run_client(&client, &c);
   pthread_join(client, &cret);
-  //CHECK_EQUAL((uint64_t)cret, 0);
   kill_server(&server, &s, &sret);
 }
 
