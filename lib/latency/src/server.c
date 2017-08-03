@@ -98,7 +98,7 @@ static int server_loop(const int server, const int eserver, struct epoll_event *
           if (ret < 0) {
             return -1;
           } else if (ret) {
-            sent = send(cd->fd, cd->data, cd->size, 0);
+            sent = send(cd->fd, cd->data, cd->transfer_size, 0);
             if (sent < 0) {
               if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 rte_ring_enqueue(eq, (void *)cd);
@@ -106,8 +106,8 @@ static int server_loop(const int server, const int eserver, struct epoll_event *
                 perror("Unable to send data");
                 return -1;
               }
-            } else if (sent < cd->remaining) {
-              cd->remaining -= sent;
+            } else if (sent < cd->transfer_remaining) {
+              cd->transfer_remaining -= sent;
               rte_ring_enqueue(eq, (void *)cd);
             }
           }
@@ -141,7 +141,7 @@ static inline int create_server(const char *ip, const int port) {
   return server;
 }
 
-static int serve(const char *ip, const int port, ssize_t size, int wcpu, uint8_t *run) {
+static int serve(const char *ip, const int port, ssize_t transfer_size, int wcpu, uint8_t *run) {
   unsigned cpu, node;
   if (getcpu(&cpu, &node) < 0) {
     perror("Unable to determine cpu/node");
@@ -160,7 +160,7 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu, uint8_t
   char *data = NULL;
   struct command_descriptor *cds = NULL;
   struct rte_ring *ring = NULL;
-  if (allocate_command_ring(LATENCY_CONNECTIONS_MAX, size, &cds, &ring, &data) < 0) {
+  if (allocate_command_ring(LATENCY_CONNECTIONS_MAX, transfer_size, &cds, &ring, &data) < 0) {
     return -1;
   }
   struct rte_ring *eq = rte_ring_create("cmd_ring", LATENCY_CONNECTIONS_MAX,
@@ -205,7 +205,7 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu, uint8_t
 static void *do_server(void *param) {
   struct server_args *p = (struct server_args *)param;
   p->run = 1;
-  uint64_t r = serve(p->ip, p->port, p->size, p->wcpu, &p->run);
+  uint64_t r = serve(p->ip, p->port, p->transfer_size, p->wcpu, &p->run);
   pthread_exit((void *)r);
 }
 
@@ -216,7 +216,7 @@ void kill_server(pthread_t *thread, struct server_args *p, void **ret) {
 
 void run_server(pthread_t *thread, struct server_args *p) {
   pthread_attr_t attr;
-  if (p->size % 8 != 0 || p->size < 8) {
+  if (p->transfer_size % 8 != 0 || p->transfer_size < 8) {
     perror("Invalid size setting");
     abort();
   }

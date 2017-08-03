@@ -13,7 +13,7 @@ extern "C" {
 
 struct client_args {
   const char *ip;
-  ssize_t size;
+  ssize_t transfer_size;
   const int port;
   int count;
   int samples;

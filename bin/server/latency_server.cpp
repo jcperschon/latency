@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
   struct server_args p = {
     .ip = ip.c_str(),
     .port = port,
-    .size = size,
+    .transfer_size = size,
     .rcpu = rcpu,
     .wcpu = wcpu,
   };

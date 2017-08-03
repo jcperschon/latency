@@ -22,13 +22,13 @@ TEST(TestLatencyGroup, TestClientServer) {
   struct server_args s = {
     .ip = ip,
     .port = port,
-    .size = size,
+    .transfer_size = size,
     .rcpu = 1,
     .wcpu = 0,
   };
   struct client_args c = {
     .ip = ip,
-    .size = size,
+    .transfer_size = size,
     .port = port,
     .count = count,
     .samples = samples,

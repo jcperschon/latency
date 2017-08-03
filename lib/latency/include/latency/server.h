@@ -13,7 +13,7 @@ extern "C" {
 struct server_args {
   const char *ip;
   const int port;
-  ssize_t size;
+  ssize_t transfer_size;
   int rcpu;
   int wcpu;
   uint8_t run;

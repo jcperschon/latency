@@ -18,25 +18,15 @@ static inline int getcpu(unsigned *cpu, unsigned *node) {
   #endif
 }
 
-struct send_responses_param {
-  struct rte_ring *ring;
-  ssize_t size;
-  int run;
-};
-
 struct command_descriptor {
   struct timespec timers[4] __rte_cache_aligned;
-  ssize_t remaining;
-  ssize_t size;
+  ssize_t transfer_remaining;
+  ssize_t transfer_size;
+  ssize_t transfer_sequence;
   char *data;
   int fd;
-  int companion;
-  int valid;
+  int first_recv_after_send;
 };
-
-static inline uint64_t ns_diff(struct timespec start, struct timespec end) {
-  return (end.tv_sec - start.tv_sec) * 1000000000 + end.tv_nsec - start.tv_nsec;
-}
 
 static inline int setfdnonblocking(int fd) {
   int flags, s;
@@ -60,21 +50,21 @@ static inline int process_eq(void **responses, struct rte_ring *eq) {
       LATENCY_CONNECTIONS_MAX - 1, NULL);
   for (unsigned response = 0; response < dequeued; response++) {
     cd = (struct command_descriptor *)responses[response];
-    sent = send(cd->fd, &(cd->data[cd->size - cd->remaining]),
-        cd->remaining, 0);
+    sent = send(cd->fd, &(cd->data[cd->transfer_size - cd->transfer_remaining]),
+        cd->transfer_remaining, 0);
     if (sent < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         rte_ring_enqueue(eq, (void *)cd);
       } else {
         return -1;
       }
-    } else if (sent < cd->remaining) {
-      cd->remaining -= sent;
+    } else if (sent < cd->transfer_remaining) {
+      cd->transfer_remaining -= sent;
       rte_ring_enqueue(eq, (void *)cd);
     } else {
-      clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[3]);
-      cd->remaining = cd->size;
-      cd->valid++;
+      clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[1]);
+      cd->transfer_remaining = cd->transfer_size;
+      cd->transfer_sequence++;
     }
   }
 }
@@ -104,11 +94,8 @@ static inline int prepare_socket(int socket, int server) {
 }
 
 static inline int receive_data(struct command_descriptor *cd) {
-  if (cd->remaining == cd->size) {
-    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[0]);
-  }
-  ssize_t rx = recv(cd->fd, &(cd->data[cd->size - cd->remaining]),
-      cd->remaining, 0);
+  ssize_t rx = recv(cd->fd, &(cd->data[cd->transfer_size - cd->transfer_remaining]),
+      cd->transfer_remaining, 0);
   if (rx < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       return 0;
@@ -117,17 +104,17 @@ static inline int receive_data(struct command_descriptor *cd) {
       return -1;
     }
   }
-  if (rx - cd->remaining == 0) {
+  if (rx - cd->transfer_remaining == 0) {
     clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &cd->timers[1]);
-    cd->remaining = cd->size;
+    cd->transfer_remaining = cd->transfer_size;
     return 1;
   } else {
-    cd->remaining -= rx;
+    cd->transfer_remaining -= rx;
     return 0;
   }
 }
 
-static inline int allocate_command_ring(ssize_t count, ssize_t size,
+static inline int allocate_command_ring(ssize_t count, ssize_t transfer_size,
     struct command_descriptor **cds, struct rte_ring **ring, char **data) {
   char *d = NULL;
   struct command_descriptor *c = NULL;
@@ -137,7 +124,7 @@ static inline int allocate_command_ring(ssize_t count, ssize_t size,
     perror("Unable to allocate command descriptor memory");
     return -1;
   }
-  ssize_t aligned_size = size - size % 64 + 64;
+  ssize_t aligned_size = transfer_size - transfer_size % 64 + 64;
   if (posix_memalign((void **)&d, 64, aligned_size * (count - 1)) < 0) {
     perror("Unable to allocate data memory");
     return -1;
@@ -145,8 +132,8 @@ static inline int allocate_command_ring(ssize_t count, ssize_t size,
   memset(d, 0, aligned_size * (count - 1));
   memset(c, 0, (count - 1) * sizeof(struct command_descriptor));
   for (int i = 0; i < count - 1; i++) {
-    c[i].remaining = size;
-    c[i].size = size;
+    c[i].transfer_remaining = transfer_size;
+    c[i].transfer_size = transfer_size;
     c[i].data = &d[i * aligned_size];
   }
   r = rte_ring_create("cmd_ring", count,

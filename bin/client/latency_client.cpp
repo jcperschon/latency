@@ -109,7 +109,7 @@ int main(int argc, char **argv) {
   pthread_t client;
   struct client_args p = {
     .ip = ip.c_str(),
-    .size = size,
+    .transfer_size = size,
     .port = port,
     .count = connections,
     .samples = samples,
