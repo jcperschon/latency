@@ -14,9 +14,8 @@ static struct option long_options[] = {
   {"help", no_argument, NULL, 'h'},
   {"ip", required_argument, NULL, 'i'},
   {"port", required_argument, NULL, 'p'},
-  {"size", required_argument, NULL, 's'},
-  {"r-cpu", required_argument, NULL, 'r'},
-  {"w-cpu", required_argument, NULL, 'w'},
+  {"transfer-size", required_argument, NULL, 's'},
+  {"cpu", required_argument, NULL, 'C'},
   {0, 0, 0, 0},
 };
 
@@ -24,9 +23,8 @@ static char help[][80] = {
   "Display this help message",
   "IP address of remote latency service (default 127.0.0.1)",
   "TCP port used by remote latency service (default 1234)",
-  "Round trip payload size (default 1)",
-  "Epoll reader CPU affinity (default none)",
-  "Socket writer CPU affinity (default none)", 
+  "Round trip tranfer size (default 8)",
+  "CPU affinity (default none)",
 };
 
 void usage() {
@@ -64,12 +62,11 @@ int main(int argc, char **argv) {
   int c = 0;
   std::string ip = "127.0.0.1";
   int port = 1234;
-  int size = 8;
-  int rcpu = -1;
-  int wcpu = -1;
+  int transfer_size = 8;
+  int cpu = -1;
   while (1) {
     int option_index = 0;
-    c = getopt_long(argc, argv, "hi:p:s:r:w:",
+    c = getopt_long(argc, argv, "hi:p:s:C:",
         long_options, &option_index);
     if (c == -1) {
       break;
@@ -85,13 +82,10 @@ int main(int argc, char **argv) {
         port = std::stoi(optarg);
         break;
       case 's':
-        size = std::stoi(optarg);
+        transfer_size = std::stoi(optarg);
         break;
-      case 'r':
-        rcpu = std::stoi(optarg);
-        break;
-      case 'w':
-        wcpu = std::stoi(optarg);
+      case 'C':
+        cpu = std::stoi(optarg);
         break;
       default:
         usage();
@@ -102,9 +96,8 @@ int main(int argc, char **argv) {
   struct server_args p = {
     .ip = ip.c_str(),
     .port = port,
-    .transfer_size = size,
-    .rcpu = rcpu,
-    .wcpu = wcpu,
+    .transfer_size = transfer_size,
+    .cpu = cpu,
   };
   run_server(&server, &p);
   pthread_join(server, NULL);

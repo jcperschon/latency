@@ -15,10 +15,9 @@ struct client_args {
   const char *ip;
   ssize_t transfer_size;
   const int port;
-  int count;
+  int connections;
   int samples;
-  int rcpu;
-  int wcpu;
+  int cpu;
 };
 
 void run_client(pthread_t *thread, struct client_args *p);

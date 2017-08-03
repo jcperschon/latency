@@ -14,26 +14,24 @@ TEST_GROUP(TestLatencyGroup) {
 TEST(TestLatencyGroup, TestClientServer) {
   const char ip[] = "127.0.0.1";
   const int port = 1234;
-  ssize_t size = 4096;
-  int count = 10;
+  ssize_t transfer_size = 4096;
+  int connections = 10;
   int samples = 100;
   pthread_t server;
   pthread_t client;
   struct server_args s = {
     .ip = ip,
     .port = port,
-    .transfer_size = size,
-    .rcpu = 1,
-    .wcpu = 0,
+    .transfer_size = transfer_size,
+    .cpu = 0,
   };
   struct client_args c = {
     .ip = ip,
-    .transfer_size = size,
+    .transfer_size = transfer_size,
     .port = port,
-    .count = count,
+    .connections = connections,
     .samples = samples,
-    .rcpu = 2,
-    .wcpu = 3,
+    .cpu = 1,
   };
   void *sret = NULL;
   void *cret = NULL;

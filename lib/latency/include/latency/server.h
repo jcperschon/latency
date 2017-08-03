@@ -14,8 +14,7 @@ struct server_args {
   const char *ip;
   const int port;
   ssize_t transfer_size;
-  int rcpu;
-  int wcpu;
+  int cpu;
   uint8_t run;
 };
 

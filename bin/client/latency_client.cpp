@@ -14,7 +14,8 @@ static struct option long_options[] = {
   {"port", required_argument, NULL, 'p'},
   {"connections", required_argument, NULL, 'c'},
   {"samples", required_argument, NULL, 'n'},
-  {"size", required_argument, NULL, 's'},
+  {"transfer-size", required_argument, NULL, 's'},
+  {"cpu", required_argument, NULL, 'C'},
   {0, 0, 0, 0},
 };
 
@@ -24,9 +25,8 @@ static char help[][80] = {
   "TCP port used by remote latency service (default 1234)",
   "Number of connections to run in parallel (default 1)",
   "Number of samples to collect (default 1)",
-  "Round trip payload size (default 1)",
-  "Epoll reader CPU affinity (default none)",
-  "Socket writer CPU affinity (default none)", 
+  "Round round trip transfer size (default 8)",
+  "CPU affinity (default none)",
 };
 
 void usage() {
@@ -66,12 +66,11 @@ int main(int argc, char **argv) {
   int port = 1234;
   int connections = 1;
   int samples = 1;
-  int size = 8;
-  int wcpu = -1;
-  int rcpu = -1;
+  int transfer_size = 8;
+  int cpu = -1;
   while (1) {
     int option_index = 0;
-    c = getopt_long(argc, argv, "hi:p:c:n:s:r:w:",
+    c = getopt_long(argc, argv, "hi:p:c:n:s:C:",
         long_options, &option_index);
     if (c == -1) {
       break;
@@ -93,13 +92,10 @@ int main(int argc, char **argv) {
         samples = std::stoi(optarg);
         break;
       case 's':
-        size = std::stoi(optarg);
+        transfer_size = std::stoi(optarg);
         break;
-      case 'r':
-        rcpu = std::stoi(optarg);
-        break;
-      case 'w':
-        wcpu = std::stoi(optarg);
+      case 'C':
+        cpu = std::stoi(optarg);
         break;
       default:
         usage();
@@ -109,12 +105,11 @@ int main(int argc, char **argv) {
   pthread_t client;
   struct client_args p = {
     .ip = ip.c_str(),
-    .transfer_size = size,
+    .transfer_size = transfer_size,
     .port = port,
-    .count = connections,
+    .connections = connections,
     .samples = samples,
-    .rcpu = rcpu,
-    .wcpu = wcpu,
+    .cpu = cpu,
   };
   run_client(&client, &p);
   pthread_join(client, NULL);

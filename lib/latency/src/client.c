@@ -160,24 +160,24 @@ static int client_loop(const int samples, const int epoll_fd,
       }
     }
   } while (sample < samples);
-  fprintf(stdout, "d0 (us), d1 (us), d2 (us)\n");
+  fprintf(stdout, "tx (us), nx (us), rx (us), total (us)\n");
   for (i = 0; i < samples; i++) {
-    fprintf(stdout, "%.2f, %.2f, %.2f\n",
+    fprintf(stdout, "%.2f, %.2f, %.2f, %.2f\n",
         records[3 * i + 0]/1000.0,
         records[3 * i + 1]/1000.0,
-        records[3 * i + 2]/1000.0);
+        records[3 * i + 2]/1000.0,
+        (records[3 * i + 0] + records[3 * i + 1] + records[3 * i + 2])/1000.0);
   }
   return 0;
 }
 
 static int benchmark(const char *ip, const int port, const int count,
-    int samples, ssize_t transfer_size, int wcpu) {
+    int samples, ssize_t transfer_size) {
   unsigned cpu, node;
   if (getcpu(&cpu, &node) < 0) {
     perror("Unable to determine cpu/node");
     return -1;
   }
-  fprintf(stdout, "Running client on cpu %u node %u \n", cpu, node);
   int epoll_fd = epoll_create1(0);
   if (epoll_fd < 0) {
     perror("Unable to create epoll file descriptor");
@@ -233,8 +233,8 @@ static int benchmark(const char *ip, const int port, const int count,
 
 static void *do_client(void *param) {
   struct client_args *p = (struct client_args *)param;
-  uint64_t r = benchmark(p->ip, p->port, p->count, p->samples,
-      p->transfer_size, p->wcpu);
+  uint64_t r = benchmark(p->ip, p->port, p->connections, p->samples,
+      p->transfer_size);
   pthread_exit((void *)r);
 }
 
@@ -244,7 +244,7 @@ void run_client(pthread_t *thread, struct client_args *p) {
     abort();
   }
   pthread_attr_t attr;
-  if (set_thread_priority_max(&attr, p->rcpu) < 0) {
+  if (set_thread_priority_max(&attr, p->cpu) < 0) {
     perror("Unable to configure client");
     abort();
   }

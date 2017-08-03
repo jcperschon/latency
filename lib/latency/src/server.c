@@ -143,7 +143,7 @@ static inline int create_server(const char *ip, const int port) {
 }
 
 static int serve(const char *ip, const int port, ssize_t transfer_size,
-    int wcpu, uint8_t *run) {
+    uint8_t *run) {
   unsigned cpu, node;
   if (getcpu(&cpu, &node) < 0) {
     perror("Unable to determine cpu/node");
@@ -209,7 +209,7 @@ static int serve(const char *ip, const int port, ssize_t transfer_size,
 static void *do_server(void *param) {
   struct server_args *p = (struct server_args *)param;
   p->run = 1;
-  uint64_t r = serve(p->ip, p->port, p->transfer_size, p->wcpu, &p->run);
+  uint64_t r = serve(p->ip, p->port, p->transfer_size, &p->run);
   pthread_exit((void *)r);
 }
 
@@ -224,7 +224,7 @@ void run_server(pthread_t *thread, struct server_args *p) {
     perror("Invalid size setting");
     abort();
   }
-  if (set_thread_priority_max(&attr, p->rcpu) < 0) {
+  if (set_thread_priority_max(&attr, p->cpu) < 0) {
     perror("Unable to configure server");
     abort();
   }
