@@ -30,6 +30,7 @@ struct command_descriptor {
   ssize_t size;
   char *data;
   int fd;
+  int companion;
   int valid;
 };
 
@@ -126,36 +127,42 @@ static inline int receive_data(struct command_descriptor *cd) {
   }
 }
 
-static inline struct rte_ring *allocate_command_ring(ssize_t count,
-    ssize_t size) {
-  struct command_descriptor *cds = NULL;
-  char *data = NULL;
-  if (posix_memalign((void **)&cds, 64,
+static inline int allocate_command_ring(ssize_t count, ssize_t size,
+    struct command_descriptor **cds, struct rte_ring **ring, char **data) {
+  char *d = NULL;
+  struct command_descriptor *c = NULL;
+  struct rte_ring *r = NULL;
+  if (posix_memalign((void **)&c, 64,
         (count - 1) * sizeof(struct command_descriptor)) < 0) {
     perror("Unable to allocate command descriptor memory");
-    return NULL;
+    return -1;
   }
   ssize_t aligned_size = size - size % 64 + 64;
-  if (posix_memalign((void **)&data, 64, aligned_size * (count - 1)) < 0) {
+  if (posix_memalign((void **)&d, 64, aligned_size * (count - 1)) < 0) {
     perror("Unable to allocate data memory");
+    return -1;
   }
-  memset(cds, 0, (count - 1) * sizeof(struct command_descriptor));
+  memset(d, 0, aligned_size * (count - 1));
+  memset(c, 0, (count - 1) * sizeof(struct command_descriptor));
   for (int i = 0; i < count - 1; i++) {
-    cds[i].remaining = size;
-    cds[i].size = size;
-    cds[i].data = &data[i * aligned_size];
+    c[i].remaining = size;
+    c[i].size = size;
+    c[i].data = &d[i * aligned_size];
   }
-  struct rte_ring *ring = rte_ring_create("cmd_ring", count,
+  r = rte_ring_create("cmd_ring", count,
       RING_F_SP_ENQ | RING_F_SC_DEQ);
-  if (ring == NULL) {
+  if (r == NULL) {
     perror("Unable to allocate command descriptor ring");
-    return NULL;
+    return -1;
   }
   for (int i = 0; i < count - 1; i++) {
     do {
-    } while (unlikely(rte_ring_enqueue(ring, (void *)(&cds[i])) != 0));
+    } while (unlikely(rte_ring_enqueue(r, (void *)(&c[i])) != 0));
   }
-  return ring;
+  *data = d;
+  *cds = c;
+  *ring = r;
+  return 0;
 }
 
 #endif // LATENCY_COMMON_H_

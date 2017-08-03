@@ -111,7 +111,7 @@ static int client_loop(const int samples, const int eserver,
         perror("connection error");
         return -1;
       } else {
-        if ((cd->valid > 1) && (cd->remaining == cd->size)) {
+        if (cd->valid > 1 && cd->remaining == cd->size && collected < samples) {
           clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now);
           results[collected * 4 + 0] = ns_diff(cd->timers[0], cd->timers[1]);
           results[collected * 4 + 1] = ns_diff(cd->timers[1], cd->timers[2]);
@@ -161,14 +161,16 @@ static int benchmark(const char *ip, const int port, const int count,
     perror("Unable to determine cpu/node");
     return -1;
   }
-  printf("Running client on cpu %u node %u \n", cpu, node);
+  fprintf(stdout, "Running client on cpu %u node %u \n", cpu, node);
   int eserver = epoll_create1(0);
   if (eserver < 0) {
     perror("Unable to create epoll file descriptor");
     return -1;
   }
-  struct rte_ring *ring = allocate_command_ring(LATENCY_CONNECTIONS_MAX, size);
-  if (ring == NULL) {
+  char *data = NULL;
+  struct command_descriptor *cds = NULL;
+  struct rte_ring *ring = NULL;
+  if (allocate_command_ring(LATENCY_CONNECTIONS_MAX, size, &cds, &ring, &data) < 0) {
     return -1;
   }
   struct rte_ring *eq = rte_ring_create("cmd_ring", LATENCY_CONNECTIONS_MAX,
@@ -179,12 +181,12 @@ static int benchmark(const char *ip, const int port, const int count,
   if (create_clients(ip, port, count, eserver, ring, eq) < 0) {
     return -1;
   }
-  uint64_t *results = malloc(sizeof(uint64_t) * samples * 4);
+  uint64_t *results = (uint64_t *)malloc(sizeof(uint64_t) * samples * 4);
   if (results == NULL) {
     perror("Unable to buffer results");
     return -1;
   }
-  void **responses = malloc(sizeof(void *) *
+  void **responses = (void **)malloc(sizeof(void *) *
       (LATENCY_CONNECTIONS_MAX - 1));
   if (responses == NULL) {
     perror("Unable to create response area");
@@ -203,15 +205,16 @@ static int benchmark(const char *ip, const int port, const int count,
     return -1;
   }
   free(events);
-  free(*responses);
+  free(responses);
   free(results);
   free(eq);
   free(ring);
+  free(data);
+  free(cds);
   return 0;
 }
 
 static void *do_client(void *param) {
-  printf("Client thread\n");
   struct client_args *p = (struct client_args *)param;
   uint64_t r = benchmark(p->ip, p->port, p->count, p->samples,
       p->size, p->wcpu);
@@ -219,6 +222,10 @@ static void *do_client(void *param) {
 }
 
 void run_client(pthread_t *thread, struct client_args *p) {
+  if (p->size % 8 > 0 || p->size < 8) {
+    perror("Invalid size setting");
+    abort();
+  }
   pthread_attr_t attr;
   if (set_thread_priority_max(&attr, p->rcpu) < 0) {
     perror("Unable to configure client");
@@ -228,4 +235,5 @@ void run_client(pthread_t *thread, struct client_args *p) {
     perror("Unable to start client");
     abort();
   }
+  pthread_attr_destroy(&attr);
 }

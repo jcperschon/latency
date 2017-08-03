@@ -148,7 +148,7 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu, uint8_t
     perror("Unable to determine cpu/node");
     return -1;
   }
-  printf("Running server reader on cpu %u node %u \n", cpu, node);
+  fprintf(stdout, "Running server on cpu %u node %u \n", cpu, node);
   int server = create_server(ip, port);
   if (server < 0) {
       return -1;
@@ -158,8 +158,10 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu, uint8_t
     perror("Unable to create epoll file descriptor");
     return -1;
   }
-  struct rte_ring *ring = allocate_command_ring(LATENCY_CONNECTIONS_MAX, size);
-  if (ring == NULL) {
+  char *data = NULL;
+  struct command_descriptor *cds = NULL;
+  struct rte_ring *ring = NULL;
+  if (allocate_command_ring(LATENCY_CONNECTIONS_MAX, size, &cds, &ring, &data) < 0) {
     return -1;
   }
   struct rte_ring *eq = rte_ring_create("cmd_ring", LATENCY_CONNECTIONS_MAX,
@@ -184,7 +186,7 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu, uint8_t
     perror("Unable to allocate memory for events");
     return -1;
   }
-  void **responses = malloc(sizeof(void *) *
+  void **responses = (void **)malloc(sizeof(void *) *
       (LATENCY_CONNECTIONS_MAX - 1));
   if (responses == NULL) {
     perror("Unable to create response area");
@@ -194,9 +196,11 @@ static int serve(const char *ip, const int port, ssize_t size, int wcpu, uint8_t
     return -1;
   }
   free(events);
-  free(*responses);
+  free(responses);
   free(eq);
   free(ring);
+  free(data);
+  free(cds);
 }
 
 static void *do_server(void *param) {
@@ -213,6 +217,10 @@ void kill_server(pthread_t *thread, struct server_args *p, void **ret) {
 
 void run_server(pthread_t *thread, struct server_args *p) {
   pthread_attr_t attr;
+  if (p->size % 8 != 0 || p->size < 8) {
+    perror("Invalid size setting");
+    abort();
+  }
   if (set_thread_priority_max(&attr, p->rcpu) < 0) {
     perror("Unable to configure server");
     abort();
@@ -221,4 +229,5 @@ void run_server(pthread_t *thread, struct server_args *p) {
     perror("Unable to start server");
     abort();
   }
+  pthread_attr_destroy(&attr);
 }
