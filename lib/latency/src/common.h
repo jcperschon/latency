@@ -104,8 +104,8 @@ static inline int prepare_socket(int socket, int server) {
 }
 
 static inline int receive_data(struct command_descriptor *cd) {
-  ssize_t rx = recv(cd->fd, &(cd->data[cd->transfer_size - cd->transfer_remaining]),
-      cd->transfer_remaining, 0);
+  ssize_t rx = recv(cd->fd, &(cd->data[cd->transfer_size -
+      cd->transfer_remaining]), cd->transfer_remaining, 0);
   if (rx < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       return 0;

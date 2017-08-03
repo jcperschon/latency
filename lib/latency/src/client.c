@@ -162,10 +162,10 @@ static int client_loop(const int samples, const int epoll_fd,
   } while (sample < samples);
   fprintf(stdout, "d0 (us), d1 (us), d2 (us)\n");
   for (i = 0; i < samples; i++) {
-    fprintf(stdout, "%lu,%lu,%lu\n",
-        records[3 * i + 0]/1000,
-        records[3 * i + 1]/1000,
-        records[3 * i + 2]/1000);
+    fprintf(stdout, "%.2f, %.2f, %.2f\n",
+        records[3 * i + 0]/1000.0,
+        records[3 * i + 1]/1000.0,
+        records[3 * i + 2]/1000.0);
   }
   return 0;
 }
@@ -186,7 +186,8 @@ static int benchmark(const char *ip, const int port, const int count,
   char *data = NULL;
   struct command_descriptor *cds = NULL;
   struct rte_ring *ring = NULL;
-  if (allocate_command_ring(LATENCY_CONNECTIONS_MAX, transfer_size, &cds, &ring, &data) < 0) {
+  if (allocate_command_ring(LATENCY_CONNECTIONS_MAX, transfer_size,
+      &cds, &ring, &data) < 0) {
     return -1;
   }
   struct rte_ring *eq = rte_ring_create("cmd_ring", LATENCY_CONNECTIONS_MAX,

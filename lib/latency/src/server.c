@@ -50,8 +50,9 @@ static inline int accept_and_add_to_epoll_fd(int server, int eserver,
   return 0;
 }
 
-static int server_loop(const int server, const int eserver, struct epoll_event *events,
-    void **responses, struct rte_ring *eq, struct rte_ring *ring, uint8_t *run) {
+static int server_loop(const int server, const int eserver,
+    struct epoll_event *events, void **responses, struct rte_ring *eq,
+    struct rte_ring *ring, uint8_t *run) {
   struct command_descriptor *cd = NULL;
   ssize_t sent;
   struct epoll_event ev = {0};
@@ -141,7 +142,8 @@ static inline int create_server(const char *ip, const int port) {
   return server;
 }
 
-static int serve(const char *ip, const int port, ssize_t transfer_size, int wcpu, uint8_t *run) {
+static int serve(const char *ip, const int port, ssize_t transfer_size,
+    int wcpu, uint8_t *run) {
   unsigned cpu, node;
   if (getcpu(&cpu, &node) < 0) {
     perror("Unable to determine cpu/node");
@@ -160,7 +162,8 @@ static int serve(const char *ip, const int port, ssize_t transfer_size, int wcpu
   char *data = NULL;
   struct command_descriptor *cds = NULL;
   struct rte_ring *ring = NULL;
-  if (allocate_command_ring(LATENCY_CONNECTIONS_MAX, transfer_size, &cds, &ring, &data) < 0) {
+  if (allocate_command_ring(LATENCY_CONNECTIONS_MAX, transfer_size,
+        &cds, &ring, &data) < 0) {
     return -1;
   }
   struct rte_ring *eq = rte_ring_create("cmd_ring", LATENCY_CONNECTIONS_MAX,
@@ -180,7 +183,8 @@ static int serve(const char *ip, const int port, ssize_t transfer_size, int wcpu
     perror("Unable to add server to epoll file descriptor");
     return -1;
   }
-  struct epoll_event *events = malloc(sizeof(struct epoll_event) * LATENCY_MAX_EVENTS);
+  struct epoll_event *events = malloc(sizeof(struct epoll_event) *
+      LATENCY_MAX_EVENTS);
   if (events == NULL) {
     perror("Unable to allocate memory for events");
     return -1;
